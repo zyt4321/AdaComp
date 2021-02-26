@@ -34,7 +34,8 @@ import mnist
 from Worker import worker
 from PS import PS
 from Supervisor import Supervisor
-
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
 
 FLAGS = tf.app.flags.FLAGS
@@ -48,7 +49,7 @@ tf.app.flags.DEFINE_integer('nb_workers', 100,
                             """Number of workers.""")
 tf.app.flags.DEFINE_integer('id_worker', 0,
                             """ID of worker""")
-tf.app.flags.DEFINE_string('ip_PS', '0.0.0.0',
+tf.app.flags.DEFINE_string('ip_PS', 'localhost',
                             """The ip adresse of PS""")
 tf.app.flags.DEFINE_integer('port', 2223,
                             """The port used in PS""")
