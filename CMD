@@ -1,0 +1,1 @@
+ docker run --network host -e PYTHONUNBUFFERED=1 -e SPEED=240k -e WORKER_ID=1 -e SERVER_IP=192.168.1.184 comp

@@ -1,0 +1,3 @@
+python main_new.py --type_node PS --nb_workers 2
+python main_new.py --nb_workers 1 --id_worker 1 --batch_size 128
+python main_new.py --type_node Supervisor --nb_workers 2 --batch_size 10000

@@ -1,0 +1,44 @@
+# yaml 配置
+version: '3'
+services:
+  gradint-1:
+    build: .
+    cap_add:
+      - NET_ADMIN
+    environment:
+      SPEED: "10m"
+      PYTHONUNBUFFERED: "1"
+      WORKER_ID: "1"
+      SERVER_IP: "172.17.0.1"
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 1G
+  gradint-2:
+    build: .
+    cap_add:
+      - NET_ADMIN
+    environment:
+      SPEED: "5m"
+      PYTHONUNBUFFERED: "1"
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 1G
+  gradint-3:
+    build: .
+    cap_add:
+      - NET_ADMIN
+    environment:
+      SPEED: "1m"
+      PYTHONUNBUFFERED: "1"
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          cpus: '0.75'
+          memory: 1G

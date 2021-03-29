@@ -33,16 +33,15 @@ from __future__ import print_function
 import tensorflow as tf
 import Tf_op as df
 import socket as sck
-import Model_DNN as mdnn
 import Communication as com
-import mnist
 import time
-import tensorboard
+
+import model.cifar.cifar10 as cifar10
 
 FLAGS = tf.app.flags.FLAGS
 
 
-def Supervisor(D, graph=None):
+def Supervisor(D, graph=None, model_name=""):
     """ Build Tensorflow graph and run iterations """
     if graph == None:
         graph = tf.Graph()
@@ -53,7 +52,7 @@ def Supervisor(D, graph=None):
         inputs, labels = D
 
         # Build a Graph that computes the logits predictions from the model.
-        logits = mdnn.CNN_model(inputs, graph)
+        logits = cifar10.inference(inputs, FLAGS.batch_size)
 
         # Calculate loss and accuracy.
         loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(labels=labels, logits=logits))
@@ -76,7 +75,7 @@ def Supervisor(D, graph=None):
 
             # summary
             merged = tf.summary.merge_all()
-            summary_writer = tf.summary.FileWriter('logs/{}'.format(time.strftime("%Y%m%d-%H%M%S",
+            summary_writer = tf.summary.FileWriter('logs/{}/{}'.format(model_name, time.strftime("%Y%m%d-%H%M%S",
                                                                    time.localtime())), sess.graph)
 
             iteration = 0
@@ -86,9 +85,9 @@ def Supervisor(D, graph=None):
                 s.connect((FLAGS.ip_PS, FLAGS.port))
 
                 # Get parameters from PS
-                com.send_msg(s, "", "GET_W")
+                com.send_msg(s, "", "GET_W", -2, 0)
 
-                _, data = com.recv_msg(s)
+                _, _, _, data = com.recv_msg(s)
                 iteration, W = com.decode_variables(data)
                 s.close()
 

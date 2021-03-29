@@ -31,9 +31,23 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import socket
 import struct
-import pickle  as pck
+import pickle as pck
 import heapq
+from Compress import *
+import numpy as np
+import tensorflow as tf
+import sys
+FLAGS = tf.app.flags.FLAGS
 
+topk_plain = TopkPlainCompressor()
+topk = TopkCompressor()
+kus = KurtosisCompressor()
+adat = AdaTreshCompressor()
+onebit = OneBitCompressor()
+onebit01 = OneBitCompressor01()
+my_comp = MyCompressor()
+
+compressor = my_comp
 
 def recvall(sock, n):
     # Helper function to recv n bytes or return None if EOF is hit
@@ -51,14 +65,15 @@ def recvall(sock, n):
     return data
 
 
-def send_msg(sock, msg, cmd):
+def send_msg(sock, msg, cmd, id_worker, command):
     # Prefix each message with a 4-byte length (network byte order)
     cmd = cmd[0]
     assert (isinstance(cmd, str) and len(cmd) == 1)
 
     if type(msg) == type("str"):
         msg = msg.encode()
-    msg = struct.pack('>I', len(msg)) + struct.pack('>c', cmd.encode()) + msg
+    msg = struct.pack('>I', len(msg)) + struct.pack('>c', cmd.encode()) + \
+          struct.pack('>i', id_worker) + struct.pack('>f', command) + msg
     sock.sendall(msg)
 
 
@@ -66,58 +81,100 @@ def recv_msg(sock):
     # Read message length and unpack it into an integer
     raw_msglen = recvall(sock, 4)
     if not raw_msglen:
-        return None
+        raise Exception("Recv Error")
     raw_cmd = recvall(sock, 1)
     if not raw_cmd:
-        return None
+        raise Exception("Recv Error")
+    raw_id_worker = recvall(sock, 4)
+    if not raw_id_worker:
+        raise Exception("Recv Error")
+    raw_command = recvall(sock, 4)
+    if not raw_command:
+        raise Exception("Recv Error")
+
     msglen = struct.unpack('>I', raw_msglen)[0]
     cmd = struct.unpack('>c', raw_cmd)[0].decode()
+    id_worker = struct.unpack('>i', raw_id_worker)[0]
+    command = struct.unpack('>f', raw_command)[0]
     if cmd == 'P':
         cmd = "PUSH"
     elif cmd == 'G':
         cmd = "GET_W"
     # Read the message data
-    return cmd, recvall(sock, msglen)
+    return cmd, id_worker, command, recvall(sock, msglen)
 
 
-# Float class with inverse ordering
-class backwards(float):
-    def __lt__(self, other):
-        return float.__lt__(abs(self), abs(other))
-
-    def __le__(self, other):
-        return float.__le__(abs(self), abs(other))
-
-    def __gt__(self, other):
-        return float.__gt__(abs(self), abs(other))
-
-    def __ge__(self, other):
-        return float.__ge__(abs(self), abs(other))
-
-
-def encode_variables(sess, collection, iteration, compression=1):
+def encode_variables(sess, collection, iteration, compression=1, uncompress=False):
     updates = {}
+    merged = {}
     # Compression of variables
-    if compression < 1:
+    if uncompress:
         indices_dict = {}
         for var in sess.graph.get_collection_ref(collection):
             value = sess.run(var).flatten()
-            nb_samples = int(max(1, len(value) * compression))
-            heapqueue = []
-            for i in range(nb_samples):
-                heapq.heappush(heapqueue, (backwards(value[i]), i))
-            for i in range(nb_samples, len(value)):
-                heapq.heappushpop(heapqueue, (backwards(value[i]), i))
+            updates[var.op.name] = value
+            indices_dict[var.op.name] = list(range(len(value)))
+        print("Parameter Size: {:.2f} KB".format(sys.getsizeof(pck.dumps(updates, protocol=-1)) / 1024))
 
-            values, indices = [], []
-            # for j in range(nb_samples,len(value)):
-            for j in range(nb_samples):
-                v, ind = heapq.heappop(heapqueue)
-                values.append(v)
-                indices.append(ind)
-            updates[var.op.name] = values
-            indices_dict[var.op.name] = indices
         return pck.dumps((iteration, updates, indices_dict), protocol=-1)
+
+    if compression < 1:
+        indices_dict = {}
+
+        # # save
+        # dicts = {}
+
+        avg_dict = {}
+        total_compress_time = 0
+        mask_dict, means_0_dict, means_1_dict = {}, {}, {}
+        for var in sess.graph.get_collection_ref(collection):
+            value = sess.run(var).flatten()
+            # # save
+            # dicts[var.op.name] = value
+
+            # 1. topk and others basic methods
+            # values, indices = fixed_compress_rate_without_residual(value, compression)
+            # merged[var.op.name] = topk.compress(value, var.op.name, compression)
+            # values, indices = kus.compress(value, var.op.name, compression)
+            # values, indices = adat.compress(value, var.op.name, compression)
+            # values, indices = compressor.compress(value, var.op.name, compression)
+            #
+            # updates[var.op.name] = values
+            # indices_dict[var.op.name] = indices
+
+
+            # 2. my compress
+            # cluster_res, group_avg, indices = compressor.compress(value, var.op.name, compression)
+            t1 = time.time()
+            merged[var.op.name] = compressor.compress(value, var.op.name, compression)
+            t2 = time.time()
+            total_compress_time += t2 - t1
+
+            # updates[var.op.name] = cluster_res
+            # avg_dict[var.op.name] = group_avg
+            # indices_dict[var.op.name] = indices
+
+            # 3. 1 bit
+
+            # mask0, mean0, mean1 = compressor.compress(value, var.op.name)
+
+            # mask_dict[var.op.name] = mask0
+            # means_0_dict[var.op.name] = mean0
+            # means_1_dict[var.op.name] = mean1
+
+        # 1. topk and others basic methods
+        # packed = (iteration, updates, indices_dict)
+        packed = (iteration, merged)
+        # 2. my compress
+        # packed = (iteration, updates, avg_dict, indices_dict)
+        # 3. 1 bit
+        # print("Parameter Size: {:.2f} KB".format(sys.getsizeof(pck.dumps(mask_dict, protocol=-1)) / 1024))
+        # packed = (iteration, mask_dict, means_0_dict, means_1_dict)
+
+        # # save
+        # np.savez("grads_save/save.npz", **dicts)
+        print("Compress: {:.3f}".format(total_compress_time))
+        return pck.dumps(packed, protocol=-1)
 
     else:
         # Full matrix communications
@@ -126,5 +183,10 @@ def encode_variables(sess, collection, iteration, compression=1):
         return pck.dumps([iteration, updates], protocol=-1)
 
 
-def decode_variables(message):
-    return pck.loads(message)
+def decode_variables(message, is_grad=False):
+    if not is_grad or FLAGS.uncompress:
+        return pck.loads(message)
+
+    packed = pck.loads(message)
+    after_decompress = compressor.decompress(*packed)
+    return after_decompress

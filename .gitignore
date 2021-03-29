@@ -1,0 +1,5 @@
+data_MNIST
+grads_save
+logs
+logs_fengdu_observe
+logs_worker

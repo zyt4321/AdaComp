@@ -33,10 +33,10 @@ import tensorflow as tf
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
-import mnist
-from Worker import worker
-from PS import PS
-from Supervisor import Supervisor
+from Worker_new import worker
+from PS_new import PS
+from Supervisor_new import Supervisor
+import model.cifar.cifar10 as cifar10
 
 
 FLAGS = tf.app.flags.FLAGS
@@ -53,26 +53,58 @@ tf.app.flags.DEFINE_string('ip_PS', 'localhost',
                            """The ip adresse of PS""")
 tf.app.flags.DEFINE_integer('port', 2223,
                             """The port used in PS""")
-tf.app.flags.DEFINE_integer('image_size', 28,
+tf.app.flags.DEFINE_integer('image_size', 24,
                             """The size of image""")
-tf.app.flags.DEFINE_integer('image_depth', 1,
+tf.app.flags.DEFINE_integer('image_depth', 3,
                             """The depth of image""")
 tf.app.flags.DEFINE_integer('nb_classes', 10,
                             """ Number of classes""")
+# Basic model parameters.
+tf.app.flags.DEFINE_integer('batch_size', 128,
+                            """Number of images to process in a batch.""")
+tf.app.flags.DEFINE_string('data_dir', 'model/cifar/cifar10_data/',
+                           """Path to the CIFAR-10 data directory.""")
+
+tf.app.flags.DEFINE_bool('uncompress', False,
+                          """Not compress""")
+
+tf.app.flags.DEFINE_float('compression_rate', 0.01,
+                          """Compression rate of worker updates.""")
+
+tf.app.flags.DEFINE_bool('more_info', False,
+                          """If calcu the compression rate.""")
+
+tf.app.flags.DEFINE_string('strategy', 'MY',
+                           """Server communication strategy""")
 
 if FLAGS.type_node == "Worker":
     with tf.Graph().as_default() as graph:
         # Load training data
-        training_data = mnist.get_local_data(FLAGS.id_worker, FLAGS.nb_workers)
+        data_range = (1, 2)
+        # if FLAGS.nb_workers == 2:
+        #     if FLAGS.id_worker == 1:
+        #         data_range = (1, 3)
+        #     else:
+        #         data_range = (3, 6)
+
+        # training_data = cifar10.distorted_inputs(data_range=data_range)
+        # with tf.Session() as sess:
+        #     # Initialize the TF variables
+        #     print("============================================")
+        #     tf.train.start_queue_runners(sess=sess)
+        #
+        #     print(tf.reshape(training_data[0][0], [-1]).eval(session=sess))
+        # print("============================================")
+
         # Run model
-        worker(training_data, graph)
+        worker(graph, "cifar")
 
 if FLAGS.type_node == "Supervisor":
     with tf.Graph().as_default() as graph:
         # Load test data
-        test_data = mnist.get_test_set()
+        test_data = cifar10.inputs(True)
         # Test model
-        Supervisor(test_data, graph)
+        Supervisor(test_data, graph, "cifar")
 
 if FLAGS.type_node == "PS":
     # Update model loop

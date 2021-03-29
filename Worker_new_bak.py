@@ -34,8 +34,7 @@ import tensorflow as tf
 import Tf_op as df
 import Communication as com
 import socket as sck
-import Model_DNN as mdnn
-import mnist
+import model.cifar.cifar10 as cifar10
 from tensorflow.compat.v1 import ConfigProto
 from tensorflow.compat.v1 import InteractiveSession
 import sys
@@ -47,30 +46,50 @@ config.gpu_options.allow_growth = True
 session = InteractiveSession(config=config)
 
 FLAGS = tf.app.flags.FLAGS
+from functools import reduce
+from operator import mul
 
-tf.app.flags.DEFINE_integer('batch_size', 10,
-                            """Number of images to process in a mini-batch.""")
+class Timer():
+    '''
+       The EMA Timer
+    '''
+    def __init__(self):
+        self.calu_time = 0
+        self.comm_time = 0
+        self.mu = 0.9
 
-tf.app.flags.DEFINE_float('compression_rate', 0.0000001,
-                          """Compression rate of worker updates.""")
+    def update_calu(self, t):
+        self.calu_time = self.mu * self.calu_time + (1 - self.mu) * t
 
-tf.app.flags.DEFINE_bool('more_info', False,
-                          """If calcu the compression rate.""")
+    def update_commu(self, t):
+        self.comm_time = self.mu * self.comm_time + (1 - self.mu) * t
+
+    def get_epsilon(self):
+        return self.calu_time / self.comm_time
+
+def get_num_params():
+    num_params = 0
+    for variable in tf.trainable_variables():
+        shape = variable.get_shape()
+        print("get_num_params", shape)
+        num_params += reduce(mul, [dim.value for dim in shape], 1)
+    return num_params
+
 # Worker routine
-def worker(D, graph=None):
+def worker(D, graph=None, model_name=""):
     """ Build Tensorflow graph and run iterations """
-
     if graph == None:
         graph = tf.Graph()
+
     # Build Tensorflow graph which computes gradients of the model with one mini-batch of examples
     with graph.as_default():
 
         # Get input and labels for learning from D
         inputs, labels = D
-        logits = mdnn.CNN_model(inputs, graph)
+        logits = cifar10.inference(inputs)
 
         # Calculate loss.
-        loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(labels=labels, logits=logits))
+        loss = cifar10.loss(logits, labels)
 
         optimizer = tf.train.GradientDescentOptimizer(0.1)
         grads = optimizer.compute_gradients(loss)
@@ -93,6 +112,12 @@ def worker(D, graph=None):
                 R_ku = tf.reduce_mean(tf.pow((grad - mean), 4) / tf.pow(variance, 2))
                 tf.summary.scalar("statistic-R_ku/{}".format(var.op.name), R_ku)
 
+                temp = tf.abs(grad) / (tf.reduce_max(tf.abs(grad)) - tf.abs(grad))
+                # alpha = 1 - tf.exp(- temp)
+                idx = tf.where(temp > 0.5)
+                output = tf.gather_nd(grad, idx)
+                tf.summary.histogram("alpha/{}".format(var.op.name), output)
+
             # compress rate
             compressed = tf.Variable(1, trainable=False, collections=["Summary"], name="compressed")
             uncompressed = tf.Variable(1, trainable=False, collections=["Summary"], name="uncompressed")
@@ -104,13 +129,14 @@ def worker(D, graph=None):
         # Tensorflow op to update parameters from PS
         get_W = df.get_w(graph, "W_global")
 
+        timer = Timer()
         with tf.Session() as sess:
             # Initialize the TF variables
             sess.run([init])
             tf.train.start_queue_runners(sess=sess)
 
             if FLAGS.more_info:
-                summary_writer = tf.summary.FileWriter('logs_worker/{}'.format(time.strftime("%Y%m%d-%H%M%S",
+                summary_writer = tf.summary.FileWriter('logs_worker/{}/{}'.format(model_name, time.strftime("%Y%m%d-%H%M%S",
                                                                                       time.localtime())), sess.graph)
                 merged = tf.summary.merge_all()
 
@@ -120,33 +146,52 @@ def worker(D, graph=None):
 
             while iteration < FLAGS.iter_max:
                 # Get the parameters from the PS
-                com.send_msg(s, "", "GET_W")
-                cmd, data = com.recv_msg(s)
+                t1 = time.time()
+                com.send_msg(s, "", "GET_W", FLAGS.id_worker)
+                t2 = time.time()
+                cmd, _, data = com.recv_msg(s)
+                t3 = time.time()
                 iteration, W = com.decode_variables(data)
+                t4 = time.time()
                 s.close()
 
                 # Update the parameters
                 sess.run(get_W, {key + "_delta:0": value for key, value in W.items()})
-
+                # t5 = time.time()
                 # Compute gradients stored in Tensorflow variables
-                inp, log, lab, loss_values, _ = sess.run([inputs, logits, labels, loss, train_op])
+                # inp, log, lab, loss_values, _ = sess.run([inputs, logits, labels, loss, train_op])
+                _, loss_values = sess.run([train_op, loss])
+                t6 = time.time()
+                timer.update_calu(t6 - t4)
 
                 # Encode the update with the local timer (iteration)
-                update = com.encode_variables(sess, "W_grad", iteration, compression=FLAGS.compression_rate)
-                # update = com.encode_variables(sess, "W_grad", iteration, compression=0.99)
+                update = com.encode_variables(sess, "W_grad", iteration,
+                                              compression=FLAGS.compression_rate, uncompress=FLAGS.uncompress)
+                t7 = time.time()
 
                 # Push the update to PS
                 s = sck.socket(sck.AF_INET, sck.SOCK_STREAM)
                 s.connect((FLAGS.ip_PS, FLAGS.port))
 
-                com.send_msg(s, update, "PUSH")
+                t8 = time.time()
+                com.send_msg(s, update, "PUSH", FLAGS.id_worker)
+                t9 = time.time()
+                timer.update_commu(t9 - t8)
+
                 # if FLAGS.calcu_compress_rate:
                     # uncompress_grad = com.encode_variables(sess, "W_grad", iteration, compression=0.99)
                     # sess.run(rate, feed_dict={"compressed:0": sys.getsizeof(update), "uncompressed:0": sys.getsizeof(uncompress_grad)})
-                print("Loss: {:.3f}  Parameter Size: {:.2f} KB".format(loss_values, sys.getsizeof(update) / 1024))
+                print("Loss: {:.3f} Parameter Size: {:.2f} KB".format(
+                    loss_values, sys.getsizeof(update) / 1024))
+                print("Time:\n [Iter] {:.3f} s, [Calcu] {:.3f} s, [Compress] {:.3f} s ".format(
+                    t7 - t3, t6 - t4, t7 - t6
+                ))
+                print("[EMA Calcu] {:.3f} s, [EMA Comm] {:.3f} s, [EMA epsilon] {:.3f}".format(
+                    timer.calu_time, timer.comm_time, timer.get_epsilon()
+                ))
 
                 if FLAGS.more_info:
-                    uncompress_grad = com.encode_variables(sess, "W_grad", iteration, compression=0.99)
+                    uncompress_grad = com.encode_variables(sess, "W_grad", iteration, compression=0.99, uncompress=True)
                     merged_summary = sess.run(merged, feed_dict={"compressed:0": sys.getsizeof(update), "uncompressed:0": sys.getsizeof(uncompress_grad)})
                     summary_writer.add_summary(merged_summary, iteration)
 

@@ -33,12 +33,15 @@ import tensorflow as tf
 import Tf_op as df
 import socket as sck
 import numpy as np
-import Model_DNN as mdnn
 import Communication as com
 import pickle as pck
 import os
+from datetime import datetime
+import traceback
+import time
+import sys
 
-# import mnist
+import model.cifar.cifar10 as cifar10
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -55,9 +58,70 @@ def count_pred(history, key, loc):
         st = np.add.reduce([[1 if i in h[key] else 0 for i in loc] for h in history], axis=0)
     return st
 
-def learning_rate_decay(iteration, decay_rate=0.8, decay_every=500):
+def learning_rate_decay(iteration, decay_rate=1, decay_every=500):
     decay_num = iteration // decay_every
     return FLAGS.learning_rate * (decay_rate ** decay_num)
+
+class Recorder():
+    def __init__(self):
+        self.worker_ema_time = {}
+        self.worker_last_timestamp = {}
+        self.worker_last_version = {}
+        self.mu = 0.9
+        self.cmin = 0.5
+        self.cmax = 1.5
+
+    def arrive(self, worker_id):
+        '''
+            Worker arrived at the server, update its EMA time according its last timestamp
+        :param worker_id:
+        :return:
+        '''
+        if worker_id not in self.worker_last_timestamp:
+            return
+        last_round_takes = time.time() - self.worker_last_timestamp[worker_id]
+        self.update_worker_ema_time(worker_id, last_round_takes)
+
+    def leave(self, worker_id, iter):
+        '''
+            Start send grad to workers, record the timestamp and the version (number of iter)
+        :param worker_id:
+        :return:
+        '''
+        self.worker_last_timestamp[worker_id] = time.time()
+        self.worker_last_version[worker_id] = iter
+
+    def update_worker_ema_time(self, worker_id, t):
+        self.worker_ema_time[worker_id] = self.mu * self.worker_ema_time[worker_id] + (1 - self.mu) * t
+
+    def delay_theta(self, worker_id):
+        '''
+            Get the delay theta
+        :param worker_id:
+        :return:
+        '''
+        all_ema = self.worker_ema_time.values()
+        median = np.median(all_ema)
+        return self.worker_ema_time[worker_id] / median
+
+    def get_command(self, worker_id):
+        '''
+            Get command according to theta:
+        :param theta:
+        :return:
+            0: cmin <= theta <= cmax;
+            -1: theta > cmax;
+            float: theta < cmin (means the times to wait)
+        '''
+        all_ema = self.worker_ema_time.values()
+        median = np.median(all_ema)
+        theta = self.worker_ema_time[worker_id] / median
+
+        if self.cmin <= theta <= self.cmax:
+            return 0
+        if theta > self.cmax:
+            return -1
+        return (self.cmin - theta) * median
 
 # Parameter Server routine
 def PS():
@@ -68,7 +132,7 @@ def PS():
 
         # Build a Graph that computes the logits predictions from the
         # inference model.
-        logits = mdnn.CNN_model(inputs, graph)
+        logits = cifar10.inference(inputs)
 
         # Build an initialization operation to run below.
         init = tf.global_variables_initializer()
@@ -76,6 +140,8 @@ def PS():
 
         update_op = df.apply_sparse_update(graph, "W_global")
         set_W = df.set_w(graph, "W_global")
+
+        recoder = Recorder()
 
         with tf.Session(graph=graph) as sess:
 
@@ -89,6 +155,8 @@ def PS():
             tcpsock.bind(("", FLAGS.port))
 
             history = []
+            worker_num_record = {i: 0 for i in range(1, FLAGS.nb_workers + 1)}
+            worker_latest_record = {i: 0 for i in range(1, FLAGS.nb_workers + 1)}
             iteration = 0
 
             # If has saved param, restore first
@@ -116,14 +184,19 @@ def PS():
                 while iteration < FLAGS.iter_max + FLAGS.nb_workers - 1:
                     tcpsock.listen(1)
                     (wsocket, (ip, port)) = tcpsock.accept()
-                    cmd, data = com.recv_msg(wsocket)
+                    cmd, id_worker, data = com.recv_msg(wsocket)
+
+                    if iteration % 10 == 0:
+                        print("%s: iteration %d" % ((datetime.now(), iteration)))
+                    print(id_worker, len(history))
+
                     if cmd == "GET_W":
                         # Encode parameter
                         parameters = com.encode_variables(sess, "W_global", iteration, compression=1)
-                        com.send_msg(wsocket, parameters, "PARAM")
+                        com.send_msg(wsocket, parameters, "PARAM", -1)
                         wsocket.close()
                     elif cmd == "PUSH":
-                        old_iter, gradients, indices = com.decode_variables(data)
+                        old_iter, gradients, indices = com.decode_variables(data, is_grad=True)
                         delay = iteration - old_iter
                         # for each trainable variable of the model
                         for k in gradients.keys():
@@ -140,20 +213,30 @@ def PS():
                             feed_dict[k[:-5] + "_delta_indices:0"] = indices[k]
 
                         sess.run(update_op, feed_dict)
+
+                        # record history and delete unnecessary value
+                        worker_num_record[id_worker] += 1
+
+                        last_min = min(worker_latest_record.values())
+                        worker_latest_record[id_worker] = iteration
+                        now_min = min(worker_latest_record.values())
+                        history = history[(now_min - last_min):]
                         # Add update to history
                         history.append({key: set(indices) for key, indices in indices.items()})
 
                         iteration += 1
-                        cmd, data = com.recv_msg(wsocket)
+                        cmd, _, data = com.recv_msg(wsocket)
                         if cmd == "GET_W":
                             # Encode parameter
                             parameters = com.encode_variables(sess, "W_global", iteration, compression=1)
-                            com.send_msg(wsocket, parameters, "PARAM")
+                            # print("Parameter Size: {:.2f} KB".format(
+                            #     sys.getsizeof(parameters) / 1024))
+                            com.send_msg(wsocket, parameters, "PARAM", -1)
                             wsocket.close()
                         else:
                             wsocket.close()
             except Exception as e:
-                print(e)
+                traceback.print_exc()
             finally:
                 # Save parameters
                 parameters = com.encode_variables(sess, "W_global", iteration, compression=1)
