@@ -65,15 +65,32 @@ def recvall(sock, n):
     return data
 
 
-def send_msg(sock, msg, cmd, id_worker, command):
+def send_msg(sock, msg, cmd, id_worker, command, batchsize=1, last_round_time=-1):
+    '''
+
+    :param sock:
+    :param msg:
+    :param cmd:
+    :param id_worker: 4个字符
+    :param command:
+    :param batchsize:
+    :param last_round_time: 上一轮迭代耗时（从发送参数到接受到梯度）
+    :return:
+    '''
     # Prefix each message with a 4-byte length (network byte order)
     cmd = cmd[0]
     assert (isinstance(cmd, str) and len(cmd) == 1)
 
+    str_id_worker = str(id_worker)
+
     if type(msg) == type("str"):
         msg = msg.encode()
-    msg = struct.pack('>I', len(msg)) + struct.pack('>c', cmd.encode()) + \
-          struct.pack('>i', id_worker) + struct.pack('>f', command) + msg
+    msg = struct.pack('>I', len(msg)) \
+          + struct.pack('>c', cmd.encode()) \
+          + struct.pack('>4s', str_id_worker.encode()) \
+          + struct.pack('>f', command) \
+          + struct.pack('>I', batchsize) \
+          + struct.pack('>f', last_round_time) + msg
     sock.sendall(msg)
 
 
@@ -91,17 +108,26 @@ def recv_msg(sock):
     raw_command = recvall(sock, 4)
     if not raw_command:
         raise Exception("Recv Error")
+    raw_batchsize = recvall(sock, 4)
+    if not raw_batchsize:
+        raise Exception("Recv Error")
+    raw_round_time = recvall(sock, 4)
+    if not raw_round_time:
+        raise Exception("Recv Error")
 
     msglen = struct.unpack('>I', raw_msglen)[0]
     cmd = struct.unpack('>c', raw_cmd)[0].decode()
-    id_worker = struct.unpack('>i', raw_id_worker)[0]
+    id_worker = struct.unpack('>4s', raw_id_worker)[0].decode().strip(b'\x00'.decode())
     command = struct.unpack('>f', raw_command)[0]
+    batchsize = struct.unpack('>I', raw_batchsize)[0]
+    round_time = struct.unpack('>f', raw_round_time)[0]
     if cmd == 'P':
         cmd = "PUSH"
     elif cmd == 'G':
         cmd = "GET_W"
+
     # Read the message data
-    return cmd, id_worker, command, recvall(sock, msglen)
+    return cmd, id_worker, command, batchsize, round_time, recvall(sock, msglen)
 
 
 def encode_variables(sess, collection, iteration, compression=1, uncompress=False):
@@ -145,10 +171,10 @@ def encode_variables(sess, collection, iteration, compression=1, uncompress=Fals
 
             # 2. my compress
             # cluster_res, group_avg, indices = compressor.compress(value, var.op.name, compression)
-            t1 = time.time()
+            # t1 = time.time()
             merged[var.op.name] = compressor.compress(value, var.op.name, compression)
-            t2 = time.time()
-            total_compress_time += t2 - t1
+            # t2 = time.time()
+            # total_compress_time += t2 - t1
 
             # updates[var.op.name] = cluster_res
             # avg_dict[var.op.name] = group_avg
@@ -173,7 +199,7 @@ def encode_variables(sess, collection, iteration, compression=1, uncompress=Fals
 
         # # save
         # np.savez("grads_save/save.npz", **dicts)
-        print("Compress: {:.3f}".format(total_compress_time))
+        # print("Compress: {:.3f}".format(total_compress_time))
         return pck.dumps(packed, protocol=-1)
 
     else:

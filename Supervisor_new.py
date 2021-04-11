@@ -35,11 +35,11 @@ import Tf_op as df
 import socket as sck
 import Communication as com
 import time
+from redis_func import update_validate
 
 import model.cifar.cifar10 as cifar10
 
 FLAGS = tf.app.flags.FLAGS
-
 
 def Supervisor(D, graph=None, model_name=""):
     """ Build Tensorflow graph and run iterations """
@@ -85,9 +85,9 @@ def Supervisor(D, graph=None, model_name=""):
                 s.connect((FLAGS.ip_PS, FLAGS.port))
 
                 # Get parameters from PS
-                com.send_msg(s, "", "GET_W", -2, 0)
+                com.send_msg(s, "", "GET_W", "M000", 0) # M000 表示监控节点
 
-                _, _, _, data = com.recv_msg(s)
+                _, _, _, _, _, data = com.recv_msg(s)
                 iteration, W = com.decode_variables(data)
                 s.close()
 
@@ -103,5 +103,7 @@ def Supervisor(D, graph=None, model_name=""):
                 print("Test accuracy :", score * 100, "%")
                 print("Test Loss :", loss_value)
                 print("---------------------------------------")
+                if FLAGS.mid != 'null':
+                    update_validate(FLAGS.mid, int(iteration), float(score), float(loss_value))
                 # Compute accuracy every minute
                 time.sleep(6)

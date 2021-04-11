@@ -315,7 +315,7 @@ class MyCompressor():
         topk_value = tensor[topk_indices]
 
         # 将topk value进行聚类
-        cluster_res, group_avg = exSTING.agglo(topk_value, 64)
+        cluster_res, group_avg = exSTING.agglo(topk_value, 32)
         recover = [group_avg[i] for i in cluster_res]
         residual = topk_value - recover
         # 没有传输的梯度，完全计入残差；传输了的梯度，残差设为（原值-均值）

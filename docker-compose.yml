@@ -1,44 +1,45 @@
 # yaml 配置
-version: '3'
+version: '3.7'
 services:
-  gradint-1:
-    build: .
+  A:
+    image: comp
     cap_add:
       - NET_ADMIN
     environment:
-      SPEED: "10m"
+      SPEED: "128k"
       PYTHONUNBUFFERED: "1"
-      WORKER_ID: "1"
       SERVER_IP: "172.17.0.1"
+      TASK_SLOT: "{{.Task.Slot}}"
+      TASK_NAME: "{{.Task.Name}}"
     deploy:
       replicas: 3
-      resources:
-        limits:
-          cpus: '0.50'
-          memory: 1G
-  gradint-2:
-    build: .
-    cap_add:
-      - NET_ADMIN
-    environment:
-      SPEED: "5m"
-      PYTHONUNBUFFERED: "1"
-    deploy:
-      replicas: 3
-      resources:
-        limits:
-          cpus: '0.25'
-          memory: 1G
-  gradint-3:
-    build: .
-    cap_add:
-      - NET_ADMIN
-    environment:
-      SPEED: "1m"
-      PYTHONUNBUFFERED: "1"
-    deploy:
-      replicas: 3
-      resources:
-        limits:
-          cpus: '0.75'
-          memory: 1G
+#      resources:
+#        limits:
+#          cpus: '0.25'
+#          memory: 1G
+#  gradint-2:
+#    build: .
+#    cap_add:
+#      - NET_ADMIN
+#    environment:
+#      SPEED: "5m"
+#      PYTHONUNBUFFERED: "1"
+#    deploy:
+#      replicas: 3
+#      resources:
+#        limits:
+#          cpus: '0.25'
+#          memory: 1G
+#  gradint-3:
+#    build: .
+#    cap_add:
+#      - NET_ADMIN
+#    environment:
+#      SPEED: "1m"
+#      PYTHONUNBUFFERED: "1"
+#    deploy:
+#      replicas: 3
+#      resources:
+#        limits:
+#          cpus: '0.75'
+#          memory: 1G

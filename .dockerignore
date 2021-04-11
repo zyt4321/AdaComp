@@ -1,3 +1,11 @@
 grads_save
 logs_fengdu_observe
 logs_worker
+logs/cifar
+logs/mnist
+data_MNIST
+__pycache__
+.idea
+*.tar.gz
+*.pck
+model/cifar/cifar10_train/*

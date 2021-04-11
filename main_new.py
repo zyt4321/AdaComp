@@ -33,25 +33,23 @@ import tensorflow as tf
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
-from Worker_new import worker
-from PS_new import PS
-from Supervisor_new import Supervisor
 import model.cifar.cifar10 as cifar10
-
 
 FLAGS = tf.app.flags.FLAGS
 
+tf.app.flags.DEFINE_string('mid', 'null',
+                           """ID of this model""")
 tf.app.flags.DEFINE_integer('iter_max', 100000,
                             """Number of iterations to process on PS.""")
 tf.app.flags.DEFINE_string('type_node', 'Worker',
                            """Worker|PS|Superisor : define the local computation node""")
 tf.app.flags.DEFINE_integer('nb_workers', 100,
                             """Number of workers.""")
-tf.app.flags.DEFINE_integer('id_worker', 0,
+tf.app.flags.DEFINE_string('id_worker', "0",
                             """ID of worker""")
 tf.app.flags.DEFINE_string('ip_PS', 'localhost',
                            """The ip adresse of PS""")
-tf.app.flags.DEFINE_integer('port', 2223,
+tf.app.flags.DEFINE_integer('port', 16666,
                             """The port used in PS""")
 tf.app.flags.DEFINE_integer('image_size', 24,
                             """The size of image""")
@@ -76,6 +74,10 @@ tf.app.flags.DEFINE_bool('more_info', False,
 
 tf.app.flags.DEFINE_string('strategy', 'MY',
                            """Server communication strategy""")
+
+from Worker_new import worker
+from PS_new import PS
+from Supervisor_new import Supervisor
 
 if FLAGS.type_node == "Worker":
     with tf.Graph().as_default() as graph:

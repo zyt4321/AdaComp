@@ -52,6 +52,8 @@ FLAGS = tf.app.flags.FLAGS
 from functools import reduce
 from operator import mul
 
+import random
+
 class Timer():
     '''
        The EMA Timer
@@ -189,7 +191,7 @@ def worker(graph=None, model_name=""):
         # Tensorflow op to update parameters from PS
         get_W = df.get_w(graph, "W_global")
 
-        dataloader = Dataloader(data_path=os.path.join(FLAGS.data_dir, 'cifar-10-batches-py'))
+        dataloader = Dataloader(data_path=os.path.join(FLAGS.data_dir, 'cifar-10-batches-py'), sub_dataset=3)
         # train_images = dataloader.data_augmentation(dataloader.train_images, mode='train',
         #                                             flip=True, crop=True, crop_shape=(24, 24, 3), whiten=True,
         #                                             brightness=True, contrast=True,
@@ -219,12 +221,13 @@ def worker(graph=None, model_name=""):
 
             batch_start = 0
             batch_end = FLAGS.batch_size
+            iter_times = 0
             while iteration < FLAGS.iter_max:
                 # Get the parameters from the PS
                 t1 = time.time()
                 com.send_msg(s, "", "GET_W", FLAGS.id_worker, 0)
                 t2 = time.time()
-                cmd, _, command, data = com.recv_msg(s)
+                cmd, _, command, _, round_time, data = com.recv_msg(s)
 
                 # Change
                 if FLAGS.strategy == "MY":
@@ -235,11 +238,17 @@ def worker(graph=None, model_name=""):
                         # Speed up
                         FLAGS.batch_size, FLAGS.compression_rate = controller.speed_up(timer.get_epsilon())
 
-                t3 = time.time()
-                iteration, W = com.decode_variables(data)
-                t4 = time.time()
                 s.close()
 
+                t3 = time.time()
+                iteration, W = com.decode_variables(data)
+
+                # 随机失活
+                # if random.random() <= 0.01:
+                #     print("【Worker {}】 Oh.... offline".format(FLAGS.id_worker))
+                #     time.sleep(30)
+
+                t4 = time.time()
                 # Update the parameters
                 sess.run(get_W, {key + "_delta:0": value for key, value in W.items()})
                 # t5 = time.time()
@@ -271,21 +280,28 @@ def worker(graph=None, model_name=""):
                 s.connect((FLAGS.ip_PS, FLAGS.port))
 
                 t8 = time.time()
-                com.send_msg(s, update, "PUSH", FLAGS.id_worker, 0)
+                com.send_msg(s, update, "PUSH", FLAGS.id_worker, 0, FLAGS.batch_size)
                 t9 = time.time()
-                timer.update_commu(t9 - t8)
+                # timer.update_commu((t3 - t2) + (t9 - t8))
+                # 迭代总时间 减去 计算时间 就是通信时间
+                timer.update_commu(round_time - (t8 - t3))
 
                 # if FLAGS.calcu_compress_rate:
                     # uncompress_grad = com.encode_variables(sess, "W_grad", iteration, compression=0.99)
                     # sess.run(rate, feed_dict={"compressed:0": sys.getsizeof(update), "uncompressed:0": sys.getsizeof(uncompress_grad)})
-                print("Loss: {:.3f} Parameter Size: {:.2f} KB".format(
-                    loss_values, sys.getsizeof(update) / 1024))
+                # print("Loss: {:.3f} Parameter Size: {:.2f} KB".format(
+                #     loss_values, sys.getsizeof(update) / 1024))
                 # print("Time:\n [Iter] {:.3f} s, [Calcu] {:.3f} s, [Compress] {:.3f} s ".format(
                 #     t7 - t3, t6 - t4, t7 - t6
                 # ))
-                print("[EMA Calcu] {:.3f} s, [EMA Comm] {:.3f} s, [EMA epsilon] {:.3f}".format(
-                    timer.calcu_time, timer.comm_time, timer.get_epsilon()
+                print("【Worker {}】| bs: {}, cr: {} | Loss: {:.3f} Parameter Size: {:.2f} KB | [EMA Calcu] {:.3f} s, [EMA Comm] {:.3f} s, [Compress] {:.3f} s, [EMA epsilon] {:.3f}".format(
+                    FLAGS.id_worker,
+                    FLAGS.batch_size, FLAGS.compression_rate,
+                    loss_values, sys.getsizeof(update) / 1024,
+                    timer.calcu_time, timer.comm_time, t7 - t6, timer.get_epsilon()
                 ))
+
+                iter_times += 1
 
                 if FLAGS.more_info:
                     uncompress_grad = com.encode_variables(sess, "W_grad", iteration, compression=0.99, uncompress=True)

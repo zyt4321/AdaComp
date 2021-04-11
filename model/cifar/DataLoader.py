@@ -9,24 +9,28 @@ import random
 
 class Dataloader:
 
-    def __init__(self, data_path):
+    def __init__(self, data_path, sub_dataset):
         # 读取配置
         self.load_cifar10(data_path)
-        self._split_train_valid(valid_rate=1)
+        self._split_train_valid(sub_dataset)
         self.n_train = self.train_images.shape[0]
-        self.n_valid = self.valid_images.shape[0]
+        # self.n_valid = self.valid_images.shape[0]
         self.n_test = self.test_images.shape[0]
         print('\n' + '=' * 20 + ' load data ' + '=' * 20)
         print('# train data: %d' % (self.n_train))
-        print('# valid data: %d' % (self.n_valid))
+        # print('# valid data: %d' % (self.n_valid))
         print('# test data: %d' % (self.n_test))
         print('=' * 20 + ' load data ' + '=' * 20 + '\n')
 
-    def _split_train_valid(self, valid_rate=0.9):
+    # def _split_train_valid(self, valid_rate=0.9):
+    def _split_train_valid(self, sub_dataset=1):
         images, labels = self.train_images, self.train_labels
-        thresh = int(images.shape[0] * valid_rate)
-        self.train_images, self.train_labels = images[0:thresh, :, :, :], labels[0:thresh]
-        self.valid_images, self.valid_labels = images[thresh:, :, :, :], labels[thresh:]
+        sub_size = images.shape[0] // sub_dataset
+        sub_index = numpy.random.choice(images.shape[0], sub_size, replace=False)
+
+        # thresh = int(images.shape[0] * valid_rate)
+        self.train_images, self.train_labels = images[sub_index, :, :, :], labels[sub_index]
+        # self.valid_images, self.valid_labels = images[thresh:, :, :, :], labels[thresh:]
 
     def load_cifar10(self, directory):
         # 读取训练集

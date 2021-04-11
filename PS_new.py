@@ -41,6 +41,7 @@ import traceback
 import time
 import sys
 import threading
+from redis_func import incr_iter_times
 
 import model.cifar.cifar10 as cifar10
 
@@ -114,8 +115,16 @@ class Recorder():
     def get_oldest_version(self):
         return min(self.worker_last_version.values())
 
+    def get_oldest_version_correspond_id(self):
+        oldest = self.get_oldest_version()
+        filtered_id_version = filter(lambda x: oldest == x[1], self.worker_last_version.items())
+        return [i[0] for i in filtered_id_version]
+
     def get_worker_last_command(self, worker_id):
         return self.worker_last_command.get(worker_id, 0)
+
+    def get_worker_ema_time(self, worker_id):
+        return self.worker_ema_time.get(worker_id, 0)
 
     def delay_theta(self, worker_id):
         '''
@@ -127,9 +136,9 @@ class Recorder():
         median = np.median(all_ema)
         return self.worker_ema_time[worker_id] / median
 
-    def get_command(self, worker_id):
+    def update_command(self, worker_id):
         '''
-            Get command according to theta:
+            update command according to theta:
         :param theta:
         :return:
             0: cmin <= theta <= cmax;
@@ -152,6 +161,9 @@ class Recorder():
 lock = threading.Lock()
 recoder = Recorder()
 history = []
+bsp_save = []
+ssp_save = []
+ssp_oldest_arrived = set()
 iteration = 0
 
 # Parameter Server routine
@@ -164,7 +176,7 @@ def PS():
 
         # Build a Graph that computes the logits predictions from the
         # inference model.
-        logits = cifar10.inference(inputs)
+        logits = cifar10.inference(inputs, FLAGS.batch_size)
 
         # Build an initialization operation to run below.
         init = tf.global_variables_initializer()
@@ -208,6 +220,11 @@ def PS():
                 print("Restored parameter from iteration: ", iteration)
 
             try:
+                print("======================================")
+                print("*                                    *")
+                print("*             PS started             *")
+                print("*                                    *")
+                print("======================================")
                 while iteration < FLAGS.iter_max + FLAGS.nb_workers - 1:
                     tcpsock.listen(1)
                     (wsocket, (ip, port)) = tcpsock.accept()
@@ -231,12 +248,11 @@ def PS():
 
 
 def worker_handler(wsocket, worker_addr, sess, update_op):
-    global history, recoder, iteration
+    global history, recoder, iteration, bsp_save, ssp_save, ssp_oldest_arrived
     worker_ip, worker_port = worker_addr
     # if iteration % 10 == 0:
     #     print("%s: iteration %d" % ((datetime.now(), iteration)))
-    print("======={}=========".format(iteration))
-    print(recoder.worker_ema_time)
+
     # print(recoder.worker_last_timestamp)
     # print(recoder.worker_last_version)
     # print(recoder.worker_upload_times)
@@ -244,7 +260,7 @@ def worker_handler(wsocket, worker_addr, sess, update_op):
 
     while True:
         try:
-            cmd, id_worker, _, data = com.recv_msg(wsocket)
+            cmd, id_worker, _, batchsize, _, data = com.recv_msg(wsocket)
         except Exception as e:
             traceback.print_exc()
             break
@@ -260,16 +276,23 @@ def worker_handler(wsocket, worker_addr, sess, update_op):
                     return
 
                 command = 0
-                if id_worker >= 0:
+                if id_worker.startswith("W"):
                     min_changed = recoder.leave(id_worker, iteration)
                     history = history[min_changed:]
                     command = recoder.get_worker_last_command(id_worker)
 
                 lock.release()
-                com.send_msg(wsocket, parameters, "PARAM", -1, command) # 这里 -1 表示是server
+                com.send_msg(wsocket, parameters, "PARAM", "S000", command, 1,
+                             recoder.get_worker_ema_time(id_worker)) # 这里 S000 表示是server
+                print("Worker: {}, Parameter Size: {:.2f} KB".format(id_worker, sys.getsizeof(parameters) / 1024))
                 # 给工作节点发送完参数后，本次链接断开
                 break
         elif cmd == "PUSH":
+            print("======={}={}========".format(id_worker, iteration))
+            print(recoder.worker_ema_time)
+            if FLAGS.mid != 'null':
+                incr_iter_times(id_worker, FLAGS.mid)
+
             if lock.acquire():
                 try:
                     recoder.arrive(id_worker)
@@ -279,7 +302,13 @@ def worker_handler(wsocket, worker_addr, sess, update_op):
                     lock.release()
 
             if FLAGS.strategy == "MY":
-                command = recoder.get_command(id_worker)
+                if lock.acquire():
+                    try:
+                        command = recoder.update_command(id_worker)
+                    except:
+                        traceback.print_exc()
+                    finally:
+                        lock.release()
                 print("Workerid: {}, Command: {}".format(id_worker, command))
                 if command == -1:
                     # 丢弃本次更新
@@ -287,16 +316,98 @@ def worker_handler(wsocket, worker_addr, sess, update_op):
                 if command > 0:
                     time.sleep(command)
 
+            t1 = time.time()
+
             old_iter, gradients, indices = com.decode_variables(data, is_grad=True)
             delay = iteration - old_iter
+
+            if FLAGS.strategy == "BSP":
+                isLastOne = False
+                if lock.acquire():
+                    try:
+                        bsp_save.append((old_iter, gradients, indices))
+                        if len(bsp_save) == 12:
+                            isLastOne = True
+                            for k in gradients.keys():
+                                index_2_grad_list = {}
+                                for _, g_item, i_item in bsp_save:
+                                    for idx, index in enumerate(i_item[k]):
+                                        if index not in index_2_grad_list:
+                                            index_2_grad_list[index] = []
+                                        index_2_grad_list[index].append(g_item[k][idx])
+                                indices[k] = list(index_2_grad_list.keys())
+                                gradients[k] = [np.mean(index_2_grad_list[i]) for i in indices[k]]
+                        else:
+                            pass
+
+                    except:
+                        traceback.print_exc()
+                    finally:
+                        lock.release()
+
+                    if not isLastOne:
+                        # 等待最后一个节点将梯度上传,合并后才可以开始下一轮迭代(合并后iteration+1,跳出while)
+                        while old_iter == iteration:
+                            time.sleep(0.3)
+                        continue
+
+            if FLAGS.strategy == "SSP":
+                if lock.acquire():
+                    oldest_iter = recoder.get_oldest_version()
+                    print("Worker: {}, iteration: {}, oldest_iter: {}, old_iter: {}".format(
+                        id_worker, iteration, oldest_iter, old_iter))
+                    if iteration - oldest_iter > 3:
+                        shouldWait = True
+                        temp_iteration = iteration
+                        try:
+                            ssp_save.append((old_iter, gradients, indices))
+                            if old_iter == oldest_iter:
+                                ssp_oldest_arrived.add(id_worker)
+                                id_pairs = recoder.get_oldest_version_correspond_id()
+                                print("Worker: {}, ssp_oldest_arrived: {}, id_pairs: {}".format(id_worker, ssp_oldest_arrived, id_pairs))
+                                if len(id_pairs) == len(ssp_oldest_arrived):
+                                    # 此时说明是最后一个慢节点到达了, 把ssp_save里面的梯度做平均,然后开始更新
+                                    shouldWait = False
+                                    for k in gradients.keys():
+                                        index_2_grad_list = {}
+                                        for _, g_item, i_item in ssp_save:
+                                            for idx, index in enumerate(i_item[k]):
+                                                if index not in index_2_grad_list:
+                                                    index_2_grad_list[index] = []
+                                                index_2_grad_list[index].append(g_item[k][idx])
+                                        indices[k] = list(index_2_grad_list.keys())
+                                        gradients[k] = [np.mean(index_2_grad_list[i]) for i in indices[k]]
+                        except:
+                            traceback.print_exc()
+                        finally:
+                            lock.release()
+
+                        if shouldWait:
+                            while temp_iteration == iteration:
+                                # temp_iteration 是发现超过阈值,开始等待时记录的iteration, 理论上只有最慢节点都
+                                # 到达了以后, iteration才会更新, (跳出循环)
+                                time.sleep(0.3)
+                            continue
+                    else:
+                        lock.release()
+
+            lr_scale = 1
+            if FLAGS.strategy == "BSP":
+                lr_scale = len(bsp_save)
+            if FLAGS.strategy == "SSP" and len(ssp_oldest_arrived) > 0:
+                lr_scale = len(ssp_oldest_arrived)
+
             # for each trainable variable of the model
             for k in gradients.keys():
                 # Compute staleness for each parameter
                 staleness = count_pred(history[-delay:], k, indices[k])
-                # gradients[k] = [learning_rate_decay(iteration) * gradients[k][i] / max(1, staleness[i]) for i in
-                #                 range(len(gradients[k]))]
-                gradients[k] = [learning_rate_decay(iteration) * gradients[k][i] for i in
-                                range(len(gradients[k]))]
+                if FLAGS.strategy == "MY":
+                    r = batchsize / FLAGS.batch_size
+                    gradients[k] = [r * learning_rate_decay(iteration) * gradients[k][i] / max(1, staleness[i]) for i in
+                                    range(len(gradients[k]))]
+                else:
+                    gradients[k] = [learning_rate_decay(iteration) * gradients[k][i] for i in
+                                    range(len(gradients[k]))]
             # Update parameters
             feed_dict = {}
             for k in gradients.keys():
@@ -308,11 +419,19 @@ def worker_handler(wsocket, worker_addr, sess, update_op):
                     sess.run(update_op, feed_dict)
                     history.append({key: set(indices) for key, indices in indices.items()})
                     iteration += 1
+
+                    if FLAGS.strategy == "BSP":
+                        bsp_save.clear()
+                    if FLAGS.strategy == "SSP":
+                        ssp_oldest_arrived.clear()
+                        ssp_save.clear()
+
                 except:
                     traceback.print_exc()
                 finally:
                     lock.release()
-
+            t2 = time.time()
+            print("Aggre time: {:.3f}s".format(t2 - t1))
             # record history and delete unnecessary value
             # last_min = recoder.get_oldest_version()
             # last_min = min(worker_latest_record.values())

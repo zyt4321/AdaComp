@@ -1,1 +1,1 @@
- docker run --network host -e PYTHONUNBUFFERED=1 -e SPEED=240k -e WORKER_ID=1 -e SERVER_IP=192.168.1.184 comp
+docker run --cap-add=NET_ADMIN -e PYTHONUNBUFFERED=1 -e SPEED=2m -e WORKER_ID=1 -e SERVER_IP=172.17.0.1 comp

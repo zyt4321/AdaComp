@@ -1,5 +1,10 @@
+.idea
+__pycache__
 data_MNIST
 grads_save
 logs
 logs_fengdu_observe
 logs_worker
+*.pck
+model/cifar/cifar10_train/*
+model/cifar/cifar10_data/*
