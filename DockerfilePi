@@ -12,7 +12,7 @@ ENV PYTHONIOENCODING=utf-8
 WORKDIR /app
 RUN python3 -m pip install -U pip -i https://pypi.tuna.tsinghua.edu.cn/simple
 
-COPY requirements.txt ./
+COPY requirements-pi.txt ./
 RUN pip install -r requirements-pi.txt --default-timeout=1000
 RUN pip install https://www.piwheels.org/simple/tensorflow/tensorflow-1.13.1-cp36-none-linux_armv7l.whl
 
