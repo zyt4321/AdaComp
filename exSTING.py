@@ -3,10 +3,6 @@
 # @Date: 2021/3/9 下午4:13
 # @Filename: exSTING
 # @Author：zyt
-import matplotlib.pyplot as plt
-from matplotlib import cm
-import sklearn
-from sklearn.mixture import GaussianMixture as GMM
 import numpy as np
 from scipy import stats
 import time

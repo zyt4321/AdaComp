@@ -1,5 +1,5 @@
-tensorflow==1.13.1
 bitarray==1.7.1
 PyYAML==5.1.1
-opencv-python==4.1.0.25
+scikit-build
+opencv-python
 redis==3.5.3
