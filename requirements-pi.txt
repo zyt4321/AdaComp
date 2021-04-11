@@ -1,5 +1,4 @@
 bitarray==1.7.1
 PyYAML==5.1.1
 scikit-build
-opencv-python
 redis==3.5.3
