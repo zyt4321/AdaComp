@@ -41,6 +41,8 @@ import traceback
 import time
 import sys
 import threading
+import signal
+
 from redis_func import incr_iter_times
 
 import model.cifar.cifar10 as cifar10
@@ -168,6 +170,12 @@ iteration = 0
 
 # Parameter Server routine
 def PS():
+    # 必须要加上,否则无法捕获SIGINT信号
+    def signal_handler(sig, frame):
+        print('You pressed Ctrl+C!')
+        sys.exit(0)
+    signal.signal(signal.SIGINT, signal_handler)
+
     global recoder, iteration, history
     with tf.Graph().as_default() as graph:
         # Get input and labels for learning from D

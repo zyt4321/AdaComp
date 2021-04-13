@@ -3,3 +3,4 @@ bitarray==1.7.1
 PyYAML==5.1.1
 opencv-python==4.1.0.25
 redis==3.5.3
+scipy==1.2.1

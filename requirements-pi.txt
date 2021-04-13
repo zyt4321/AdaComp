@@ -1,4 +1,7 @@
 bitarray==1.7.1
 PyYAML==5.1.1
-scikit-build
 redis==3.5.3
+h5py
+scikit-build
+tensorflow-estimator==1.14.0
+tensorboard==1.13.0

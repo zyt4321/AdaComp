@@ -17,6 +17,6 @@ def incr_iter_times(uid, mid):
         r.incr("contribute-{}-{}".format(uid[1:], mid), amount=1)
 
 def update_validate(mid, iter, accu, loss):
-    r.lpush("model-{}-iter".format(mid), iter)
-    r.lpush("model-{}-accu".format(mid), accu)
-    r.lpush("model-{}-loss".format(mid), loss)
+    r.rpush("model-{}-iter".format(mid), iter)
+    r.rpush("model-{}-accu".format(mid), accu)
+    r.rpush("model-{}-loss".format(mid), loss)

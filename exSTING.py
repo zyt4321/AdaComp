@@ -4,7 +4,7 @@
 # @Filename: exSTING
 # @Author：zyt
 import numpy as np
-from scipy import stats
+# from scipy import stats
 import time
 
 def distance(bin_1, bin_2):

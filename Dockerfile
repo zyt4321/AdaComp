@@ -18,4 +18,4 @@ RUN python3 -m pip install -U pip -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 COPY . .
 RUN chmod +x start.sh start_worker.sh start_ps.sh start_supervisor.sh
-ENTRYPOINT ./start.sh $0 $@
+ENTRYPOINT ["./start.sh"]
